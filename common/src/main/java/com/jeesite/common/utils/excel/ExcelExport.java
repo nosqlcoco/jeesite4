@@ -3,39 +3,6 @@
  */
 package com.jeesite.common.utils.excel;
 
-import java.io.Closeable;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
-import javax.servlet.http.HttpServletResponse;
-
-import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.CellStyle;
-import org.apache.poi.ss.usermodel.Comment;
-import org.apache.poi.ss.usermodel.Font;
-import org.apache.poi.ss.usermodel.IndexedColors;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.ss.util.CellRangeAddress;
-import org.apache.poi.xssf.streaming.SXSSFWorkbook;
-import org.apache.poi.xssf.usermodel.XSSFClientAnchor;
-import org.apache.poi.xssf.usermodel.XSSFRichTextString;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.jeesite.common.codec.EncodeUtils;
 import com.jeesite.common.collect.ListUtils;
@@ -47,6 +14,24 @@ import com.jeesite.common.utils.excel.annotation.ExcelField;
 import com.jeesite.common.utils.excel.annotation.ExcelField.Align;
 import com.jeesite.common.utils.excel.annotation.ExcelField.Type;
 import com.jeesite.common.utils.excel.annotation.ExcelFields;
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.ss.usermodel.Font;
+import org.apache.poi.ss.util.CellRangeAddress;
+import org.apache.poi.xssf.streaming.SXSSFWorkbook;
+import org.apache.poi.xssf.usermodel.XSSFClientAnchor;
+import org.apache.poi.xssf.usermodel.XSSFRichTextString;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.imageio.ImageIO;
+import javax.servlet.http.HttpServletResponse;
+import java.awt.*;
+import java.awt.image.BufferedImage;
+import java.io.*;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.*;
+import java.util.List;
 
 /**
  * 导出Excel文件（导出“XLSX”格式，支持大数据量导出   @see org.apache.poi.ss.SpreadsheetVersion）
@@ -66,7 +51,8 @@ public class ExcelExport implements Closeable{
 	 * 工作表对象
 	 */
 	private Sheet sheet;
-	
+
+    private Drawing patriarch;
 	/**
 	 * 样式列表
 	 */
@@ -76,6 +62,11 @@ public class ExcelExport implements Closeable{
 	 * 当前行号
 	 */
 	private int rownum;
+
+    /**
+     * 多个图片文件目录， key为imagePath，value为图片实际存储目录
+     */
+    private Map<String, String> filePathMap;
 	
 	/**
 	 * 注解列表（Object[]{ ExcelField, Field/Method }）
@@ -96,7 +87,17 @@ public class ExcelExport implements Closeable{
 	public ExcelExport(String title, Class<?> cls){
 		this(title, cls, Type.EXPORT);
 	}
-	
+
+    /**
+     * 构造函数
+     * @param title 表格标题，传“空值”，表示无标题
+     * @param cls 实体对象，通过annotation.ExportField获取标题
+     * @param filePathMap 导出文件时，图片存储的本地目录
+     */
+	public ExcelExport(String title, Class<?> cls, Map<String,String> filePathMap){
+		this(title, cls, Type.EXPORT);
+		this.filePathMap = filePathMap;
+	}
 	/**
 	 * 构造函数
 	 * @param title 表格标题，传“空值”，表示无标题
@@ -336,6 +337,7 @@ public class ExcelExport implements Closeable{
 				sheet.setColumnWidth(i, colWidth);  
 			}
 		}
+        patriarch = sheet.createDrawingPatriarch();
 		log.debug("Create sheet {} success.", sheetName);
 	}
 	
@@ -465,7 +467,12 @@ public class ExcelExport implements Closeable{
 				}else if(val instanceof Date) {
 					cell.setCellValue((Date) val);
 					defaultDataFormat = "yyyy-MM-dd HH:mm";
-				}else {
+				}else if(val instanceof ByteArrayOutputStream){
+                    sheet.setColumnWidth(column, 7680);
+                    sheet.setDefaultRowHeight((short)7680);
+                    XSSFClientAnchor anchor = new XSSFClientAnchor(0, 0, 0, 0, (short)column, row.getRowNum(), (short)(column + 1), row.getRowNum() + 1);
+                    patriarch.createPicture(anchor, wb.addPicture(((ByteArrayOutputStream)val).toByteArray(), 5));
+				}else{
 					// 如果没有指定 fieldType，切自行根据类型查找相应的转换类（com.jeesite.common.utils.excel.fieldtype.值的类名+Type）
 					Class<?> fieldType2 = Class.forName(this.getClass().getName().replaceAll(this.getClass().getSimpleName(), 
 							"fieldtype."+val.getClass().getSimpleName()+"Type"));
@@ -498,10 +505,13 @@ public class ExcelExport implements Closeable{
 	 * @return list 数据列表
 	 */
 	public <E> ExcelExport setDataList(List<E> list){
+        File imageFile = null;
+        BufferedImage bufferImg = null;
+        ByteArrayOutputStream byteArrayOut = null;
 		for (E e : list){
 			int colunm = 0;
 			Row row = this.addRow();
-			StringBuilder sb = new StringBuilder();
+			// StringBuilder sb = new StringBuilder();
 			for (Object[] os : annotationList){
 				ExcelField ef = (ExcelField)os[0];
 				Object val = null;
@@ -523,6 +533,35 @@ public class ExcelExport implements Closeable{
 									String.class).invoke(null, ef.dictType(), val==null?"":val.toString(), "");
 						//val = DictUtils.getDictLabel(val==null?"":val.toString(), ef.dictType(), "");
 					}
+                    // 增加文件导出到Excel
+                    if(StringUtils.isNotBlank(ef.imagePath())) {
+                        byteArrayOut = new ByteArrayOutputStream();
+                        if(null != val) {
+                            String strVal = (String) val;
+                            String filePath = this.filePathMap.get(ef.imagePath());
+                            if(strVal.startsWith("/")) {
+                                strVal = filePath + strVal;
+                            }else {
+                                strVal = filePath + "/" + strVal;
+                            }
+                            imageFile = new File(strVal);
+                            if(imageFile.exists()) {
+                                bufferImg = ImageIO.read(imageFile);
+                                bufferImg.getScaledInstance(200, 200, Image.SCALE_DEFAULT);
+                                ImageIO.write(bufferImg, "JPEG", byteArrayOut);
+                                val = byteArrayOut;
+                                //设置行高
+                                row.setHeightInPoints(150);
+                                try{
+                                    byteArrayOut.close();
+                                }catch (IOException ex){
+
+                                }
+                            }else {
+                                val = "";
+                            }
+                        }
+                    }
 				}catch(Exception ex) {
 					// Failure to ignore
 					log.info(ex.toString());
@@ -539,9 +578,8 @@ public class ExcelExport implements Closeable{
 					// 如果获取失败，则使用默认。
 				}
 				this.addCell(row, colunm++, val, ef.align(), ef.fieldType(), dataFormat);
-				sb.append(val + ", ");
 			}
-			log.debug("Write success: ["+row.getRowNum()+"] "+sb.toString());
+			//log.debug("Write success: ["+row.getRowNum()+"] "+sb.toString());
 		}
 		return this;
 	}

@@ -90,4 +90,10 @@ public @interface ExcelField {
 	 * 字段归属组（针对每一种业务的导入、导出） imp、exp
 	 */
 	String[] groups() default {};
+
+	/**
+	 * 图片文件存储路径
+	 * @return
+	 */
+	String imagePath() default "";
 }

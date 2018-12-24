@@ -12,7 +12,8 @@
 	
 	<artifactId>jeesite-common</artifactId>
 	<packaging>jar</packaging>
-	
+	<version>4.1.1</version>
+
 	<name>JeeSite Common</name>
 	<url>http://jeesite.com</url>
 	<inceptionYear>2013-Now</inceptionYear>
